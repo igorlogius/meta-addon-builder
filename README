@@ -1,7 +1,7 @@
-#!/bin/bash
+#!/bin/bash -x
 
 # check if AMO is set 
-[ -z ${AMO+x} ] || { echo >&2 "AMO environment variable not set"; exit 1; }
+[ -z ${AMO+x} ] && { echo >&2 "AMO environment variable not set"; exit 1; }
 
 # check requirements
 MISSING_REQ=0
