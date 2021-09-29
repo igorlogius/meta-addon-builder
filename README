@@ -23,8 +23,8 @@ wget -q --show-progress "https://github.com/igorlogius/$ID/archive/main.zip" -O 
 # extract without paths and README
 unzip -j $ZIPFILE -d $EXTRDIR -x "*/README" "*/main.yml" $IGN
 
-# re-pack as xpi (zip) without paths and extended file attributes 
-XPI="$ID-$(grep '"version"' $EXTRDIR/manifest.json |cut -d'"' -f4)-$(date '+%F_%H-%M').xpi" 
+# re-pack as (zip/xpi) without paths and extended file attributes 
+XPI="$ID-$(grep '"version"' $EXTRDIR/manifest.json |cut -d'"' -f4)-$(date '+%F_%H-%M').zip" 
 zip -X -j $XPI $EXTRDIR/*
 
 # remove tmp storage
