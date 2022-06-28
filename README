@@ -5,7 +5,7 @@
 
 # check requirements
 MISSING_REQ=0
-for req in mktemp wget unzip zip grep cut date basename;do
+for req in mktemp wget unzip zip grep cut date basename curl;do
 	type $req >/dev/null 2>&1 || { echo >&2 "Missing dependency: $req"; MISSING_REQ=1; }
 done
 [ $MISSING_REQ -ne 0 ] && { echo "Aborting because of missing dependency"; exit 1; }
@@ -17,14 +17,19 @@ ID=$(basename "$AMO")
 ZIPFILE=$(mktemp)
 EXTRDIR=$(mktemp -d)
 
+# REF https://docs.github.com/en/rest/repos/repos#get-a-repository
+DEFAULT_BRANCH=$(curl   -H "Accept: application/vnd.github.v3+json"   "https://api.github.com/repos/igorlogius/$ID" -s | grep -iPo '(?<="default_branch": ")(.*)(?=",)')
+
 # download latest source
-wget -q --show-progress "https://github.com/igorlogius/$ID/archive/main.zip" -O $ZIPFILE
+wget -q --show-progress "https://github.com/igorlogius/$ID/archive/$DEFAULT_BRANCH.zip" -O $ZIPFILE
 
 # extract without paths and README
 unzip -j $ZIPFILE -d $EXTRDIR -x "*/README" "*/main.yml" "*/bug_report.md" "*/feature_request.md" "*example*" "*test*" $IGN
 
+VERSION=$(grep '"version"' $EXTRDIR/manifest.json |cut -d'"' -f4);
+
 # re-pack as (zip/xpi) without paths and extended file attributes 
-XPI="$ID-$(grep '"version"' $EXTRDIR/manifest.json |cut -d'"' -f4)-$(date '+%F_%H-%M').zip" 
+XPI="$ID-$VERSION-$(date '+%F_%H-%M').zip" 
 zip -X -j $XPI $EXTRDIR/*
 
 # remove tmp storage
@@ -35,3 +40,35 @@ unzip -l $XPI
 
 # conditional export of artifact name for github release workflow 
 [ -z ${GITHUB_ENV+x} ] || { echo "ARTNAME=$XPI" >> $GITHUB_ENV; }
+
+# # # 
+
+# removes padding ===
+b64url_encode() { 
+    cat /dev/stdin | base64 -w0 | tr -d '=' | tr '/+' '_-'
+}
+
+hmacsha256_sign() {
+	cat /dev/stdin | openssl dgst -binary -sha256 -hmac "${SECRET}"
+}
+
+header=$(echo -n '{"alg":"HS256","typ":"JWT"}' | b64url_encode)
+IAT=$(date +%s)
+JTI=$((IAT+RANDOM))
+EXP=$((IAT+30))
+payload=$(echo -n "{\"iss\":\"${ISS}\",\"iat\":${IAT},\"jti\":\"${JTI}\",\"exp\":$EXP}" | b64url_encode)
+
+
+header_payload=$(echo -n "${header}.${payload}")
+signature=$(echo -n "${header_payload}" | hmacsha256_sign | b64url_encode)
+
+AUTH_TOKEN="${header_payload}.${signature}"
+
+# upload to AMO
+curl --url "https://addons.mozilla.org/api/v4/addons/" \
+     -g \
+     -X POST \
+     -F "upload=@$XPI" \
+     -F "version=$VERSION" \
+     -H "Authorization: JWT $AUTH_TOKEN"
+
