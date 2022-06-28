@@ -13,6 +13,8 @@ done
 # addon/repo name
 ID=$(basename "$AMO")
 
+GUID=$(curl -sL https://addons.mozilla.org/api/v4/addons/addon/$ID/ | grep -iPo '(?<="guid":"{)([a-z0-9-]*)(?=}",)' )
+
 # create tmp storage
 ZIPFILE=$(mktemp)
 EXTRDIR=$(mktemp -d)
@@ -75,7 +77,7 @@ AUTH_TOKEN="${header_payload}.${signature}"
 #     -F "version=$VERSION" \
 #     -H "Authorization: JWT $AUTH_TOKEN"
 
-curl --url "https://addons.mozilla.org/api/v4/addons/$ID/versions/$VERSION/" \
+curl --url "https://addons.mozilla.org/api/v4/addons/{$GUID}/versions/$VERSION/" \
     -g \
     -XPUT \
     --form "upload=@$XPI" \
