@@ -43,6 +43,9 @@ unzip -l $XPI
 
 # # # 
 
+[ -z ${ISS+x} ] && { echo "ISS not set, not uploading to AMO"; exit 1; }
+[ -z ${SECRET+x} ] && { echo "SECRET not set, not uploading to AMO"; exit 1; }
+
 # removes padding ===
 b64url_encode() { 
     cat /dev/stdin | base64 -w0 | tr -d '=' | tr '/+' '_-'
