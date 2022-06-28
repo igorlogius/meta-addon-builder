@@ -90,7 +90,7 @@ STATUS=$(curl -sL --url "https://addons.mozilla.org/api/v4/addons/{$GUID}/versio
 )
 
 if [ $STATUS -ne 202 ];then
-    echo "Addon not Accepted, Status != 202"
+    echo "Addon not Accepted(202) != $STATUS"
     exit 1;
 fi
  
