@@ -85,7 +85,7 @@ STATUS=$(curl --url "https://addons.mozilla.org/api/v4/addons/{$GUID}/versions/$
     -g \
     -XPUT \
     --form "upload=@$XPI" \
-    -H "Authorization: JWT $AUTH_TOKEN"
+    -H "Authorization: JWT $AUTH_TOKEN" \
     -w "%{http_code}"
 )
 
