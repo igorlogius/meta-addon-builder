@@ -68,10 +68,16 @@ signature=$(echo -n "${header_payload}" | hmacsha256_sign | b64url_encode)
 AUTH_TOKEN="${header_payload}.${signature}"
 
 # upload to AMO
-curl --url "https://addons.mozilla.org/api/v4/addons/" \
-     -g \
-     -X POST \
-     -F "upload=@$XPI" \
-     -F "version=$VERSION" \
-     -H "Authorization: JWT $AUTH_TOKEN"
+#curl --url "https://addons.mozilla.org/api/v4/addons/" \
+#     -g \
+#     -X POST \
+#     -F "upload=@$XPI" \
+#     -F "version=$VERSION" \
+#     -H "Authorization: JWT $AUTH_TOKEN"
+
+curl --url "https://addons.mozilla.org/api/v4/addons/$ID/versions/$VERSION/" \
+    -g \
+    -XPUT \
+    --form "upload=@$XPI" \
+    -H "Authorization: JWT $AUTH_TOKEN"
 
