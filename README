@@ -81,7 +81,7 @@ AUTH_TOKEN="${header_payload}.${signature}"
 GUID=$(curl -sL https://addons.mozilla.org/api/v4/addons/addon/$ID/ | grep -iPo '(?<="guid":"{)([a-z0-9-]*)(?=}",)' )
 
 # upload a new version
-STATUS=$(curl --url "https://addons.mozilla.org/api/v4/addons/{$GUID}/versions/$VERSION/" \
+STATUS=$(curl -sL --url "https://addons.mozilla.org/api/v4/addons/{$GUID}/versions/$VERSION/" \
     -g \
     -XPUT \
     --form "upload=@$XPI" \
