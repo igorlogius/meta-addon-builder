@@ -15,7 +15,6 @@ done
 # addon/repo name
 ID=$(basename "$AMO")
 
-
 # create tmp storage
 ZIPFILE=$(mktemp)
 EXTRDIR=$(mktemp -d)
@@ -24,7 +23,7 @@ EXTRDIR=$(mktemp -d)
 DEFAULT_BRANCH=$(curl -sL -H "Accept: application/vnd.github.v3+json"   "https://api.github.com/repos/igorlogius/$ID" -o- | grep -iPo '(?<="default_branch": ")(.*)(?=",)')
 
 # download latest source
-wget -q --show-progress "https://github.com/igorlogius/$ID/archive/$DEFAULT_BRANCH.zip" -O $ZIPFILE
+wget -q "https://github.com/igorlogius/$ID/archive/$DEFAULT_BRANCH.zip" -O $ZIPFILE
 
 # extract without paths and README
 unzip -j $ZIPFILE -d $EXTRDIR -x "*/README" "*/main.yml" "*/bug_report.md" "*/feature_request.md" "*example*" "*test*" $IGN
@@ -39,15 +38,15 @@ zip -X -j $XPI $EXTRDIR/*
 rm -f $EXTRDIR/* && rmdir $EXTRDIR/
 
 # show content of xpi
-unzip -l $XPI
+#unzip -l $XPI
 
 # conditional export of artifact name for github release workflow 
 [ -z ${GITHUB_ENV+x} ] || { echo "ARTNAME=$XPI" >> $GITHUB_ENV; }
 
 # # # 
 
-[ -z ${ISS+x} ] && { echo "ISS not set, not uploading to AMO"; exit 1; }
-[ -z ${SECRET+x} ] && { echo "SECRET not set, not uploading to AMO"; exit 1; }
+[ -z ${ISSUER+x} ] && { echo "AMO ISSUER not set, not uploading to AMO"; exit 1; }
+[ -z ${SECRET+x} ] && { echo "AMO SECRET not set, not uploading to AMO"; exit 1; }
 
 # removes padding ===
 b64url_encode() { 
@@ -62,7 +61,7 @@ header=$(echo -n '{"alg":"HS256","typ":"JWT"}' | b64url_encode)
 IAT=$(date +%s)
 JTI=$((IAT+RANDOM))
 EXP=$((IAT+30))
-payload=$(echo -n "{\"iss\":\"${ISS}\",\"iat\":${IAT},\"jti\":\"${JTI}\",\"exp\":$EXP}" | b64url_encode)
+payload=$(echo -n "{\"iss\":\"${ISSUER}\",\"iat\":${IAT},\"jti\":\"${JTI}\",\"exp\":$EXP}" | b64url_encode)
 
 
 header_payload=$(echo -n "${header}.${payload}")
