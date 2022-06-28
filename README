@@ -21,7 +21,7 @@ ZIPFILE=$(mktemp)
 EXTRDIR=$(mktemp -d)
 
 # REF https://docs.github.com/en/rest/repos/repos#get-a-repository
-DEFAULT_BRANCH=$(curl   -H "Accept: application/vnd.github.v3+json"   "https://api.github.com/repos/igorlogius/$ID" -s | grep -iPo '(?<="default_branch": ")(.*)(?=",)')
+DEFAULT_BRANCH=$(curl -sL -H "Accept: application/vnd.github.v3+json"   "https://api.github.com/repos/igorlogius/$ID" -o- | grep -iPo '(?<="default_branch": ")(.*)(?=",)')
 
 # download latest source
 wget -q --show-progress "https://github.com/igorlogius/$ID/archive/$DEFAULT_BRANCH.zip" -O $ZIPFILE
@@ -78,7 +78,7 @@ AUTH_TOKEN="${header_payload}.${signature}"
 #     -F "version=$VERSION" \
 #     -H "Authorization: JWT $AUTH_TOKEN"
 
-GUID=$(curl -sL https://addons.mozilla.org/api/v4/addons/addon/$ID/ | grep -iPo '(?<="guid":"{)([a-z0-9-]*)(?=}",)' )
+GUID=$(curl -sL https://addons.mozilla.org/api/v4/addons/addon/$ID/ -o- | grep -iPo '(?<="guid":"{)([a-z0-9-]*)(?=}",)' )
 
 # upload a new version
 STATUS=$(curl -sL --url "https://addons.mozilla.org/api/v4/addons/{$GUID}/versions/$VERSION/" \
@@ -86,6 +86,7 @@ STATUS=$(curl -sL --url "https://addons.mozilla.org/api/v4/addons/{$GUID}/versio
     -XPUT \
     --form "upload=@$XPI" \
     -H "Authorization: JWT $AUTH_TOKEN" \
+    -o /dev/null \
     -w "%{http_code}"
 )
 
