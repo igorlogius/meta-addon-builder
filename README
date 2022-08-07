@@ -86,8 +86,8 @@ STATUS=$(curl -sL --url "https://addons.mozilla.org/api/v4/addons/{$GUID}/versio
     -XPUT \
     --form "upload=@$XPI" \
     -H "Authorization: JWT $AUTH_TOKEN" \
-    -w "%{http_code}"
-    -o $CURLOUT \
+    -w "%{http_code}" \
+    -o $CURLOUT
 )
 
 if [ $STATUS -ne 202 ];then
