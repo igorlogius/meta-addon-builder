@@ -2,9 +2,6 @@
 
 # https://addons-server.readthedocs.io/en/latest/topics/api/v4_frozen/signing.html#v4-upload-version
 
-# check if AMO is set 
-[ -z ${AMO+x} ] && { echo >&2 "AMO environment variable not set"; exit 1; }
-
 # check requirements
 MISSING_REQ=0
 for req in mktemp wget unzip zip grep cut date basename curl;do
@@ -13,7 +10,7 @@ done
 [ $MISSING_REQ -ne 0 ] && { echo "Aborting because of missing dependency"; exit 1; }
 
 # addon/repo name
-ID=$(basename "$AMO")
+ID=$(echo $GITHUB_REPOSITORY | cut -d'/' -f2)
 
 # create tmp storage
 ZIPFILE=$(mktemp)
