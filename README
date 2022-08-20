@@ -10,6 +10,7 @@ done
 [ $MISSING_REQ -ne 0 ] && { echo "Aborting because of missing dependency"; exit 1; }
 
 # addon/repo name
+OWNER=$GITHUB_REPOSITORY_OWNER
 ID=$(echo $GITHUB_REPOSITORY | cut -d'/' -f2)
 
 # create tmp storage
@@ -18,19 +19,19 @@ EXTRDIR=$(mktemp -d)
 CURLOUT=$(mktemp)
 
 # REF https://docs.github.com/en/rest/repos/repos#get-a-repository
-DEFAULT_BRANCH=$(curl -sL -H "Accept: application/vnd.github.v3+json"   "https://api.github.com/repos/igorlogius/$ID" -o- | grep -iPo '(?<="default_branch": ")(.*)(?=",)')
+DEFAULT_BRANCH=$(curl -sL -H "Accept: application/vnd.github.v3+json"   "https://api.github.com/repos/$OWNER/$ID" -o- | grep -iPo '(?<="default_branch": ")(.*)(?=",)')
 
 # download latest source
-wget -q "https://github.com/igorlogius/$ID/archive/$DEFAULT_BRANCH.zip" -O $ZIPFILE
+wget -q "https://github.com/$OWNER/$ID/archive/$DEFAULT_BRANCH.zip" -O $ZIPFILE
 
 # extract without paths and README
-unzip -j $ZIPFILE -d $EXTRDIR -x "*/README" "*/main.yml" "*/bug_report.md" "*/feature_request.md" "*example*" "*test*" $IGN
+unzip -j $ZIPFILE -d $EXTRDIR -x "*/.*/*" "*~"
 
 VERSION=$(grep '"version"' $EXTRDIR/manifest.json |cut -d'"' -f4);
 
 # re-pack as (zip/xpi) without paths and extended file attributes 
 XPI="$ID-$VERSION-$(date '+%F_%H-%M').zip" 
-zip -X -j $XPI $EXTRDIR/*
+zip -X -j $XPI $EXTRDIR/* -i "*.html" "*.js" "*.json" "*.lic" "*.css"
 
 # remove tmp storage
 rm -f $EXTRDIR/* && rmdir $EXTRDIR/
