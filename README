@@ -31,7 +31,7 @@ VERSION=$(grep '"version"' $EXTRDIR/manifest.json |cut -d'"' -f4);
 
 # re-pack as (zip/xpi) without paths and extended file attributes 
 XPI="$ID-$VERSION-$(date '+%F_%H-%M').zip" 
-zip -X -j $XPI $EXTRDIR/* -i "*.html" "*.js" "*.json" "*.lic" "*.css"
+zip -X -j $XPI $EXTRDIR/*
 
 # remove tmp storage
 rm -f $EXTRDIR/* && rmdir $EXTRDIR/
