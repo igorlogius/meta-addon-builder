@@ -24,7 +24,9 @@ DEFAULT_BRANCH=$(curl -sL -H "Accept: application/vnd.github.v3+json"   "https:/
 # download latest source
 wget -q "https://github.com/$OWNER/$ID/archive/$DEFAULT_BRANCH.zip" -O $ZIPFILE
 
-# extract without paths and README
+[ ! -f $ZIPFILE ] && { echo "Download of repo zip archive failed"; exit 1; }
+
+# extract without paths
 unzip -j $ZIPFILE -d $EXTRDIR -x "*/.*/*" "*~"
 
 VERSION=$(grep '"version"' $EXTRDIR/manifest.json |cut -d'"' -f4);
