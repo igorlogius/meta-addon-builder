@@ -4,7 +4,7 @@
 
 # check requirements
 MISSING_REQ=0
-for req in mktemp wget bsdtar grep cut date curl;do
+for req in mktemp wget unzip zip grep cut date curl;do
 	type $req >/dev/null 2>&1 || { echo >&2 "Missing dependency: $req"; MISSING_REQ=1; }
 done
 [ $MISSING_REQ -ne 0 ] && { echo "Aborting because of missing dependency"; exit 1; }
@@ -28,7 +28,12 @@ wget -q "https://github.com/$OWNER/$ID/archive/$DEFAULT_BRANCH.zip" -O $ZIPFILE
 [ ! -f $ZIPFILE ] && { echo "Download of repo zip archive failed"; exit 1; }
 
 # extract without base directory, readme, about and hidden files and dot files/dirs
-bsdtar -xvf $ZIPFILE -s'|[^/]*/||' -s'|^\..*||' -s '|^README.md$||' -s '|^about.html$||' --cd $EXTRDIR
+#bsdtar -xvf $ZIPFILE -s'|[^/]*/||' -s'|^\..*||' -s '|^README.md$||' -s '|^about.html$||' --cd $EXTRDIR
+
+unzip $ZIPFILE -d $EXTRDIR -x "*/.*/*" "*~" "*/README.md" "*/about.html"
+
+# remove the base directory 
+EXTRDIR="$EXTRDIR/$ID-$DEFAULT_BRANCH"
 
 # get version 
 VERSION=$(grep '"version"' $EXTRDIR/manifest.json |cut -d'"' -f4);
@@ -37,13 +42,13 @@ XPI=$XPIDIR/$XPINAME;
 
 # re-pack as (zip/xpi)
 cd $EXTRDIR; 
-bsdtar -a -cf $XPI *
+zip -r $XPI *
 
 # remove tmp storage
 #rm -rf $EXTRDIR/* && rmdir $EXTRDIR/
 
 # output content of xpi
-bsdtar -t -f $XPI
+unzip -l $XPI
 
 #echo $EXTRDIR
 
