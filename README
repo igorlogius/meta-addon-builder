@@ -38,9 +38,15 @@ EXTRDIR="$EXTRDIR/$ID-$DEFAULT_BRANCH"
 VERSION=$(grep '"version"' $EXTRDIR/manifest.json |cut -d'"' -f4);
 XPI="$ID-$VERSION-$(date '+%F_%H-%M').zip" 
 
+CWD=$(pwd);
+
 # re-pack as (zip/xpi)
 cd $EXTRDIR; 
 zip -r $XPI *
+
+# move XPI 
+mv $XPI $CWD/
+cd $CWD
 
 # remove tmp storage
 #rm -rf $EXTRDIR/* && rmdir $EXTRDIR/
