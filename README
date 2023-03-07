@@ -18,6 +18,9 @@ ZIPFILE=$(mktemp)
 EXTRDIR=$(mktemp -d)
 CURLOUT=$(mktemp)
 
+# lets wait a bit for github to not be stupid 
+sleep 300s  
+
 # REF https://docs.github.com/en/rest/repos/repos#get-a-repository
 DEFAULT_BRANCH=$(curl -sL -H "Accept: application/vnd.github.v3+json"   "https://api.github.com/repos/$OWNER/$ID" -o- | grep -iPo '(?<="default_branch": ")(.*)(?=",)')
 
