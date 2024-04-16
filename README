@@ -1,4 +1,4 @@
-#!/bin/bash -x
+#!/bin/bash
 
 # https://addons-server.readthedocs.io/en/latest/topics/api/v4_frozen/signing.html#v4-upload-version
 
@@ -29,10 +29,7 @@ wget -q "https://github.com/$OWNER/$ID/archive/$DEFAULT_BRANCH.zip" -O $ZIPFILE
 
 [ ! -f $ZIPFILE ] && { echo "Download of repo zip archive failed"; exit 1; }
 
-# extract without base directory, readme, about and hidden files and dot files/dirs
-#bsdtar -xvf $ZIPFILE -s'|[^/]*/||' -s'|^\..*||' -s '|^README.md$||' -s '|^about.html$||' --cd $EXTRDIR
-
-unzip $ZIPFILE -d $EXTRDIR -x "*/.*/*" "*~" "*/README.md" "*/about.html"
+unzip $ZIPFILE -d $EXTRDIR -x "*/.*/*" "*~" "*/README.md" "/LICENSE"
 
 # remove the base directory 
 EXTRDIR="$EXTRDIR/$ID-$DEFAULT_BRANCH"
@@ -60,7 +57,7 @@ unzip -l $XPI
 #echo $EXTRDIR
 
 # conditional export of artifact name for github release workflow 
-[ -z ${GITHUB_ENV+x} ] || { echo "ARTNAME=$XPI" >> $GITHUB_ENV; }
+#[ -z ${GITHUB_ENV+x} ] || { echo "ARTNAME=$XPI" >> $GITHUB_ENV; }
 
 # # # 
 
