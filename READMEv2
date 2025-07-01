@@ -65,7 +65,7 @@ unzip -l $XPI
 #[ -z ${GITHUB_ENV+x} ] || { echo "ARTNAME=$XPI" >> $GITHUB_ENV; }
 
 # # # 
-exit 0
+#exit 0
 # # # 
 
 [ -z ${ISSUER+x} ] && { echo "AMO ISSUER not set, not uploading to AMO"; exit 1; }
