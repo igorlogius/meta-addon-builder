@@ -1,0 +1,125 @@
+#!/bin/bash
+
+# https://addons-server.readthedocs.io/en/latest/topics/api/v4_frozen/signing.html#v4-upload-version
+
+# check requirements
+MISSING_REQ=0
+for req in mktemp wget unzip zip grep cut date curl;do
+	type $req >/dev/null 2>&1 || { echo >&2 "Missing dependency: $req"; MISSING_REQ=1; }
+done
+[ $MISSING_REQ -ne 0 ] && { echo "Aborting because of missing dependency"; exit 1; }
+
+# addon/repo name
+OWNER=$GITHUB_REPOSITORY_OWNER
+#ID=$(echo $GITHUB_REPOSITORY | cut -d'/' -f2)
+ID=$GITHUB_WORKFLOW
+
+# create tmp storage
+#ZIPFILE=$(mktemp)
+EXTRDIR=$(mktemp -d)
+CURLOUT=$(mktemp)
+CWD=$(pwd)
+
+# lets wait a bit for github to not be stupid 
+sleep 300s  
+
+# REF https://docs.github.com/en/rest/repos/repos#get-a-repository
+#DEFAULT_BRANCH=$(curl -sL -H "Accept: application/vnd.github.v3+json"   "https://api.github.com/repos/$OWNER/$ID" -o- | grep -iPo '(?<="default_branch": ")(.*)(?=",)')
+# download latest source
+#wget -q "https://github.com/$OWNER/$ID/archive/$DEFAULT_BRANCH.zip" -O $ZIPFILE
+#[ ! -f $ZIPFILE ] && { echo "Download of repo zip archive failed"; exit 1; }
+#unzip $ZIPFILE -d $EXTRDIR -x "*/.*/*" "*~" "*/README.md" "/LICENSE"
+
+
+# download files into extension temp dir
+cd $EXTRDIR;
+for url in $(curl -sL https://api.github.com/repos/$OWNER/webextensions/contents/$ID -o- | jq -r '.[] | select(.type=="file") | .download_url'); do
+      wget $url 
+done
+
+# remove the base directory 
+#EXTRDIR="$EXTRDIR/$ID-$DEFAULT_BRANCH"
+
+# get version 
+VERSION=$(grep '"version"' $EXTRDIR/manifest.json |cut -d'"' -f4);
+XPI="$ID-$VERSION-$(date '+%F_%H-%M').zip" 
+
+
+# re-pack as (zip/xpi)
+#cd $EXTRDIR; 
+zip -r $XPI *
+
+# move XPI 
+mv $XPI $CWD/
+cd $CWD
+
+# remove tmp storage
+#rm -rf $EXTRDIR/* && rmdir $EXTRDIR/
+
+# output content of xpi
+unzip -l $XPI
+
+#echo $EXTRDIR
+
+# conditional export of artifact name for github release workflow 
+#[ -z ${GITHUB_ENV+x} ] || { echo "ARTNAME=$XPI" >> $GITHUB_ENV; }
+
+# # # 
+exit 0
+# # # 
+
+[ -z ${ISSUER+x} ] && { echo "AMO ISSUER not set, not uploading to AMO"; exit 1; }
+[ -z ${SECRET+x} ] && { echo "AMO SECRET not set, not uploading to AMO"; exit 1; }
+
+# removes padding ===
+b64url_encode() { 
+    cat /dev/stdin | base64 -w0 | tr -d '=' | tr '/+' '_-'
+}
+
+hmacsha256_sign() {
+	cat /dev/stdin | openssl dgst -binary -sha256 -hmac "${SECRET}"
+}
+
+header=$(echo -n '{"alg":"HS256","typ":"JWT"}' | b64url_encode)
+IAT=$(date +%s)
+JTI=$((IAT+RANDOM))
+EXP=$((IAT+30))
+payload=$(echo -n "{\"iss\":\"${ISSUER}\",\"iat\":${IAT},\"jti\":\"${JTI}\",\"exp\":$EXP}" | b64url_encode)
+
+
+header_payload=$(echo -n "${header}.${payload}")
+signature=$(echo -n "${header_payload}" | hmacsha256_sign | b64url_encode)
+
+AUTH_TOKEN="${header_payload}.${signature}"
+
+# upload to AMO
+#curl --url "https://addons.mozilla.org/api/v4/addons/" \
+#     -g \
+#     -X POST \
+#     -F "upload=@$XPI" \
+#     -F "version=$VERSION" \
+#     -H "Authorization: JWT $AUTH_TOKEN"
+
+GUID=$(curl -sL https://addons.mozilla.org/api/v4/addons/addon/$ID/ -o- | grep -iPo '(?<="guid":"{)([a-z0-9-]*)(?=}",)' )
+
+# upload a new version
+STATUS=$(curl -sL --url "https://addons.mozilla.org/api/v4/addons/{$GUID}/versions/$VERSION/" \
+    -g \
+    -XPUT \
+    --form "upload=@$XPI" \
+    -H "Authorization: JWT $AUTH_TOKEN" \
+    -w "%{http_code}" \
+    -o $CURLOUT
+)
+
+if [ $STATUS -ne 202 ];then
+
+    echo ""
+    cat $CURLOUT
+    echo ""
+
+    echo "Addon not Accepted(202) != $STATUS"
+    exit 1
+fi
+ 
+
