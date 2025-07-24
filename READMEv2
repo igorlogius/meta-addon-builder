@@ -40,8 +40,17 @@ done
 # remove the base directory 
 #EXTRDIR="$EXTRDIR/$ID-$DEFAULT_BRANCH"
 
+CURRENT_AMO_VERSION=$(curl -sL https://addons.mozilla.org/api/v4/addons/addon/$ID -o- | jq -r '.current_version.version')
+CURRENT_AMO_VERSION_PARTS=($(echo -n $CURRENT_AMO_VERSION | tr '.' " "))
+LAST_PART="${CURRENT_AMO_VERSION_PARTS[2]}"
+NEW_LAST_PART=$(( LAST_PART + 1))
+VERSION="${CURRENT_AMO_VERSION_PARTS[0]}.${CURRENT_AMO_VERSION_PARTS[1]}.${NEW_LAST_PART}"
+
+# add new version to manifest.json
+cat $EXTRDIR/manifest.json | jq --arg VERSION "$VERSION" '.version = $VERSION' > $EXTRDIR/manifest.json
+
 # get version 
-VERSION=$(grep '"version"' $EXTRDIR/manifest.json |cut -d'"' -f4);
+#VERSION=$(grep '"version"' $EXTRDIR/manifest.json |cut -d'"' -f4);
 XPI="$ID-$VERSION-$(date '+%F_%H-%M').zip" 
 
 
