@@ -16,10 +16,11 @@ ID=$GITHUB_WORKFLOW
 # create tmp storage
 EXTRDIR=$(mktemp -d)
 CURLOUT=$(mktemp)
+TMPFILE=$(mktemp)
 CWD=$(pwd)
 
 # lets wait a bit for github to not be stupid 
-#sleep 300s  
+sleep 300s  
 
 # download files into extension temp dir
 cd $EXTRDIR;
@@ -28,19 +29,17 @@ for url in $(curl -sL "https://api.github.com/repos/$OWNER/webextensions/content
 done
 
 CURRENT_AMO_VERSION=$(curl -sL "https://addons.mozilla.org/api/v4/addons/addon/$ID" -o- | jq -r '.current_version.version')
-CURRENT_AMO_VERSION_PARTS=$(echo -n "$CURRENT_AMO_VERSION" | tr '.' " " )
-CURRENT_AMO_VERSION_PARTS=($CURRENT_AMO_VERSION)
+CURRENT_AMO_VERSION_PARTS=($(echo -n "$CURRENT_AMO_VERSION" | tr '.' ' ' ))
 LAST_PART="${CURRENT_AMO_VERSION_PARTS[2]}"
 NEW_LAST_PART=$((LAST_PART+1))
 VERSION="${CURRENT_AMO_VERSION_PARTS[0]}.${CURRENT_AMO_VERSION_PARTS[1]}.${NEW_LAST_PART}"
 
 # add new version to manifest.json
-cat $EXTRDIR/manifest.json | jq --arg VERSION "$VERSION" '.version = $VERSION' > $EXTRDIR/manifest.json
+cp $EXTRDIR/manifest.json $TMPFILE
+cat $TMPFILE | jq --arg VERSION "$VERSION" '.version = $VERSION' > $EXTRDIR/manifest.json
 
 # get version 
-#VERSION=$(grep '"version"' $EXTRDIR/manifest.json |cut -d'"' -f4);
 XPI="$ID-$VERSION-$(date '+%F_%H-%M').zip" 
-
 
 # re-pack as (zip/xpi)
 #cd $EXTRDIR; 
