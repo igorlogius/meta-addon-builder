@@ -24,7 +24,7 @@ sleep 300s
 # download files into extension temp dir
 cd $EXTRDIR;
 for url in $(curl -sL "https://api.github.com/repos/$OWNER/webextensions/contents/$ID" -o- | jq -r '.[] | select(.type=="file") | .download_url'); do
-      wget $url 
+      wget --url "$url"
 done
 
 CURRENT_AMO_VERSION=$(curl -sL "https://addons.mozilla.org/api/v4/addons/addon/$ID" -o- | jq -r '.current_version.version')
