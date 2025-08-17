@@ -2,111 +2,192 @@
 
 # https://addons-server.readthedocs.io/en/latest/topics/api/v4_frozen/signing.html#v4-upload-version
 
-# check requirements
-MISSING_REQ=0
-for req in mktemp wget unzip zip grep cut date curl;do
-	type $req >/dev/null 2>&1 || { echo >&2 "Missing dependency: $req"; MISSING_REQ=1; }
-done
-[ $MISSING_REQ -ne 0 ] && { echo "Aborting because of missing dependency"; exit 1; }
+#
+# consts
+# 
 
-# addon/repo name
-OWNER=$GITHUB_REPOSITORY_OWNER
-ID=$GITHUB_WORKFLOW
+AMO_API_URL="https://addons.mozilla.org/api/v4/addons"
 
-# create tmp storage
-EXTRDIR=$(mktemp -d)
-CURLOUT=$(mktemp)
-TMPFILE=$(mktemp)
-CWD=$(pwd)
+#
+# functions
+# 
 
-# lets wait a bit for github to not be stupid 
-sleep 300s  
+# Array to hold the names of created temporary files and directories
+temp_items=()
 
-# download files into extension temp dir
-cd $EXTRDIR;
-for url in $(curl -sL "https://api.github.com/repos/$OWNER/webextensions/contents/$ID" -o- | jq -r '.[] | select(.type=="file") | .download_url'); do
-    echo -n "$url" | grep -E '^.*/README.md$'
-    ret=$?  # 0:= match, 1: no match
-    if [ $ret -eq 1 ]; then
-        wget -q --no-check-certificate "$url"
+# Function to create a temporary file or directory
+create_temp() {
+    local temp_item
+    local is_directory=false
+
+    # Check for the directory switch
+    if [[ "$1" == "--dir" ]]; then
+        is_directory=true
+        shift  # Remove the switch from the arguments
     fi
-done
 
-CURRENT_AMO_VERSION=$(curl -sL "https://addons.mozilla.org/api/v4/addons/addon/$ID" -o- | jq -r '.current_version.version')
-CURRENT_AMO_VERSION_PARTS=($(echo -n "$CURRENT_AMO_VERSION" | tr '.' ' ' ))
-LAST_PART="${CURRENT_AMO_VERSION_PARTS[2]}"
-NEW_LAST_PART=$((LAST_PART+1))
-VERSION="${CURRENT_AMO_VERSION_PARTS[0]}.${CURRENT_AMO_VERSION_PARTS[1]}.${NEW_LAST_PART}"
+    if $is_directory; then
+        temp_item=$(mktemp -d)  # Create a temporary directory
+    else
+        temp_item=$(mktemp)  # Create a temporary file
+    fi
 
-# add new version to manifest.json
-cp $EXTRDIR/manifest.json $TMPFILE
-cat $TMPFILE | jq --arg VERSION "$VERSION" '.version = $VERSION' > $EXTRDIR/manifest.json
+    if [[ $? -eq 0 ]]; then
+        temp_items+=("$temp_item")  # Add the temp item to the array
+        echo "$temp_item"  # Return the name of the temp item
+    else
+        echo "Failed to create temporary item" >&2
+        return 1
+    fi
+}
 
-# get version 
-XPI="$ID-$VERSION-$(date '+%F_%H-%M').zip" 
+# Function to clean up all created temporary files and directories
+cleanup_temp_items() {
+    for item in "${temp_items[@]}"; do
+        if [[ -e "$item" ]]; then
+            rm -rf "$item"  # Remove the temporary item
+            echo "Removed temporary item: $item"
+        fi
+    done
+    temp_items=()  # Clear the array after cleanup
+}
 
-# re-pack as (zip/xpi)
-#cd $EXTRDIR; 
-zip -r $XPI *
+# Trap to ensure cleanup on exit
+trap cleanup_temp_items EXIT
 
-# move XPI 
-mv $XPI $CWD/
-cd $CWD
+# Function to calc the next version to upload to AMO
+function get_next_version() {
+    local CURRENT_AMO_VERSION="$1" 
+    local CURRENT_AMO_VERSION_PARTS=($(echo -n "$CURRENT_AMO_VERSION" | tr '.' ' ' ))
+    local LAST_PART="${CURRENT_AMO_VERSION_PARTS[2]}"
+    local NEW_LAST_PART=$((LAST_PART+1))
+    echo "${CURRENT_AMO_VERSION_PARTS[0]}.${CURRENT_AMO_VERSION_PARTS[1]}.${NEW_LAST_PART}"
+}
 
-# remove tmp storage
-#rm -rf $EXTRDIR/* && rmdir $EXTRDIR/
+# Function to download the content of a remote 
+get_remote_content() {
+    local url="$1"
+    local outfile=$(create_temp);
+    local status=$(curl -s -L --url "$url" -w "%{http_code}" -o $outfile)
+    if [ $status -ne 200 ];then
+        echo ""
+        cat $outfile 
+        echo ""
+        echo "ERROR: failed to download $url got status: $status"
+        exit 1
+    fi
+    cat $outfile 
+}
 
-# output content of xpi
-unzip -l $XPI
-
-#echo $EXTRDIR
-
-# # # 
-#exit 0
-# # # 
-
-[ -z ${ISSUER+x} ] && { echo "AMO ISSUER not set, not uploading to AMO"; exit 1; }
-[ -z ${SECRET+x} ] && { echo "AMO SECRET not set, not uploading to AMO"; exit 1; }
-
-# removes padding ===
+# Function to base64url encode ... without padding ===
 b64url_encode() { 
     cat /dev/stdin | base64 -w0 | tr -d '=' | tr '/+' '_-'
 }
 
-hmacsha256_sign() {
-	cat /dev/stdin | openssl dgst -binary -sha256 -hmac "${SECRET}"
+# function to generate the jwt auth token 
+function generate_auth_token() {
+    local header=$(echo -n '{"alg":"HS256","typ":"JWT"}' | b64url_encode)
+    local iat=$(date +%s)
+    local jti=$((iat+RANDOM))
+    local exp=$((iat+30))
+    local payload=$(echo -n "{\"iss\":\"${ISSUER}\",\"iat\":${iat},\"jti\":\"${jti}\",\"exp\":$exp}" | b64url_encode)
+    local header_payload=$(echo -n "${header}.${payload}")
+    local signature=$(echo -n "${header_payload}" | openssl dgst -binary -sha256 -hmac "${SECRET}" | b64url_encode)
+    echo "${header_payload}.${signature}"
 }
 
-header=$(echo -n '{"alg":"HS256","typ":"JWT"}' | b64url_encode)
-IAT=$(date +%s)
-JTI=$((IAT+RANDOM))
-EXP=$((IAT+30))
-payload=$(echo -n "{\"iss\":\"${ISSUER}\",\"iat\":${IAT},\"jti\":\"${JTI}\",\"exp\":$EXP}" | b64url_encode)
+# function to upload the generated xpi 
+function upload_xpi(){
+    local guid="$1"
+    local version="$2"
+    local xpi="$3"
+    local auth_token="$4"
+
+    # note -g --globoff allows curly braces which are part of the GUID in the URL
+    local status=$(curl -sL --url "$AMO_API_URL/$guid/versions/$version/" \
+        -g \
+        -XPUT \
+        --form "upload=@$xpi" \
+        -H "Authorization: JWT $auth_token" \
+        -w "%{http_code}"
+    )
+    if [ $status -ne 202 ];then
+        echo "ERROR: addon not accepted with status: $status"
+        exit 1
+    fi
+}
+
+function check_deps(){
+    MISSING=0
+    for req in "$@";do
+        type $req >/dev/null 2>&1 || { echo >&2 "ERROR: missing dependency: $req"; MISSING=1; }
+    done
+    [ $MISSING -ne 0 ] && { echo "ERROR: aborting missing dependencies"; exit 1; }
+}
+
+function check_vars(){
+    MISSING=0
+    for req in "$@";do
+        [ -z $(eval echo "\${${req}+x}") ] && { echo "ERROR: missing variable: $req"; MISSING=1; }
+    done
+    [ $MISSING -ne 0 ] && { echo "ERROR: aborting missing dependencies"; exit 1; }
+}
+
+function update_version() {
+    local fp="$1"
+    local ver="$2"
+
+    if [ ! -f $fp ];then
+        echo "ERROR: no manifest.json"
+        exit 1
+    fi
+
+    # update manifest.json with new version
+    local tmpfile=$(create_temp)
+    cat $fp > $tmpfile
+    jq --arg VERSION "$ver" '.version = $VERSION' $tmpfile > $fp
+}
+
+##
+##  MAIN 
+##
+
+# testing 
+#GITHUB_REPOSITORY_OWNER=igorlogius
+#GITHUB_WORKFLOW=copy-tabs
+
+check_vars GITHUB_REPOSITORY_OWNER GITHUB_WORKFLOW 
+check_deps cat mktemp date zip curl jq 
+
+# create and move to empty workdir 
+WORKDIR=$(create_temp --dir)
+cd $WORKDIR;
+
+# get VERSION + GUID 
+IFS=' ' read -r AMO_VERSION AMO_GUID <<<$(get_remote_content "$AMO_API_URL/addon/$GITHUB_WORKFLOW" | jq -r '.current_version.version, .guid' | tr '\n' ' ')
+
+# determine next version
+NEXT_AMO_VERSION=$(get_next_version "$AMO_VERSION")
+
+# bulk download via curl -K with jq format magic also excludes README.md
+curl -s -K <(get_remote_content "https://api.github.com/repos/$GITHUB_REPOSITORY_OWNER/webextensions/contents/$GITHUB_WORKFLOW" | jq -r '.[] | select( .type == "file" and .name != "README.md" ) | "url = \(.download_url)\noutput = \(.name)"')
+
+# write new version to file
+update_version "manifest.json" "${NEXT_AMO_VERSION}"
+
+# pack files
+XPIFILE="${GITHUB_WORKFLOW}-${NEXT_AMO_VERSION}-$(date '+%F_%H-%M').zip" 
+zip -r "$XPIFILE" *
 
 
-header_payload=$(echo -n "${header}.${payload}")
-signature=$(echo -n "${header_payload}" | hmacsha256_sign | b64url_encode)
+# # # 
 
-AUTH_TOKEN="${header_payload}.${signature}"
+check_vars ISSUER SECRET 
+check_deps base64 openssl
 
-GUID=$(curl -sL https://addons.mozilla.org/api/v4/addons/addon/$ID/ -o- | grep -iPo '(?<="guid":"{)([a-z0-9-]*)(?=}",)' )
+upload_xpi \
+    "$AMO_GUID" \
+    "$NEXT_AMO_VERSION" \
+    "$XPIFILE" \
+    "$(generate_auth_token)"
 
-# upload a new version
-STATUS=$(curl -sL --url "https://addons.mozilla.org/api/v4/addons/{$GUID}/versions/$VERSION/" \
-    -g \
-    -XPUT \
-    --form "upload=@$XPI" \
-    -H "Authorization: JWT $AUTH_TOKEN" \
-    -w "%{http_code}" \
-    -o $CURLOUT
-)
-
-if [ $STATUS -ne 202 ];then
-
-    echo ""
-    cat $CURLOUT
-    echo ""
-
-    echo "Addon not Accepted(202) != $STATUS"
-    exit 1
-fi
