@@ -102,16 +102,22 @@ function upload_xpi(){
     local version="$2"
     local xpi="$3"
     local auth_token="$4"
+    local outfile=$(create_temp)
+    
 
     # note -g --globoff allows curly braces which are part of the GUID in the URL
-    local status=$(curl -sL --url "$AMO_API_URL/$guid/versions/$version/" \
+    local status=$(curl -s -L --url "$AMO_API_URL/$guid/versions/$version/" \
         -g \
         -XPUT \
         --form "upload=@$xpi" \
         -H "Authorization: JWT $auth_token" \
-        -w "%{http_code}"
+        -w "%{http_code}" \
+        -o $outfile
     )
     if [ $status -ne 202 ];then
+        echo ""
+        cat $outfile 
+        echo ""
         echo "ERROR: addon not accepted with status: $status"
         exit 1
     fi
