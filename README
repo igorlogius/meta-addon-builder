@@ -6,7 +6,8 @@
 # consts
 # 
 
-AMO_API_URL="https://addons.mozilla.org/api/v4/addons"
+BASE_URL="https://addons.mozilla.org"
+AMO_API_URL="$BASE_URL/api/v4/addons"
 
 #
 # functions
@@ -56,7 +57,7 @@ cleanup_temp_items() {
 trap cleanup_temp_items EXIT
 
 # Function to calc the next version to upload to AMO
-function get_next_version() {
+get_next_version() {
     local CURRENT_AMO_VERSION="$1" 
     local CURRENT_AMO_VERSION_PARTS=($(echo -n "$CURRENT_AMO_VERSION" | tr '.' ' ' ))
     local LAST_PART="${CURRENT_AMO_VERSION_PARTS[2]}"
@@ -85,7 +86,7 @@ b64url_encode() {
 }
 
 # function to generate the jwt auth token 
-function generate_auth_token() {
+generate_auth_token() {
     local header=$(echo -n '{"alg":"HS256","typ":"JWT"}' | b64url_encode)
     local iat=$(date +%s)
     local jti=$((iat+RANDOM))
@@ -97,20 +98,18 @@ function generate_auth_token() {
 }
 
 # function to upload the generated xpi 
-function upload_xpi(){
+upload_xpi(){
     local guid="$1"
     local version="$2"
     local xpi="$3"
-    local auth_token="$4"
     local outfile=$(create_temp)
-    
 
     # note -g --globoff allows curly braces which are part of the GUID in the URL
     local status=$(curl -s -L --url "$AMO_API_URL/$guid/versions/$version/" \
         -g \
-        -XPUT \
+        -X PUT \
         --form "upload=@$xpi" \
-        -H "Authorization: JWT $auth_token" \
+        -H "Authorization: JWT $(generate_auth_token)" \
         -w "%{http_code}" \
         -o $outfile
     )
@@ -123,7 +122,7 @@ function upload_xpi(){
     fi
 }
 
-function check_deps(){
+check_deps(){
     MISSING=0
     for req in "$@";do
         type $req >/dev/null 2>&1 || { echo >&2 "ERROR: missing dependency: $req"; MISSING=1; }
@@ -131,7 +130,7 @@ function check_deps(){
     [ $MISSING -ne 0 ] && { echo "ERROR: aborting missing dependencies"; exit 1; }
 }
 
-function check_vars(){
+check_vars(){
     MISSING=0
     for req in "$@";do
         [ -z $(eval echo "\${${req}+x}") ] && { echo "ERROR: missing variable: $req"; MISSING=1; }
@@ -139,7 +138,7 @@ function check_vars(){
     [ $MISSING -ne 0 ] && { echo "ERROR: aborting missing dependencies"; exit 1; }
 }
 
-function update_version() {
+update_version() {
     local fp="$1"
     local ver="$2"
 
@@ -153,6 +152,47 @@ function update_version() {
     cat $fp > $tmpfile
     jq --arg VERSION "$ver" '.version = $VERSION' $tmpfile > $fp
 }
+
+update_AMO_info()  {
+    local summary=$(cat ./manifest.json | jq -r '.description')
+    local description=$(< ./README.md)
+    local template='{
+        "summary": { 
+            "en-US": "" 
+        } 
+        "description": { 
+            "en-US": "" 
+        } 
+    }'
+
+    local updated_json=$(echo "$template" | jq --arg desciption "$description" --arg summary "$summary" '.description."en-US" = $desciption | .summary."en-US" = $summary')
+
+
+
+    # note: we need to use the v5 API for this 
+    # https://mozilla.github.io/addons-server/topics/api/addons.html#edit
+    # This endpoint allows an add-on’s AMO metadata to be edited.
+    local outfile=$(create_temp);
+    local status=$(curl \
+        -s \
+        -L  \
+        --url "$BASE_URL/api/v5/addons/addon/$GITHUB_WORKFLOW/"  \
+        -X PATCH \
+        -H 'Content-type: application/json' \
+        -H "Authorization: JWT $(generate_auth_token)"  \
+        -d "$updated_json" \
+        -w "%{http_code}" \
+        -o $outfile
+    )
+    if [ $status -ne 200 ];then
+        echo ""
+        cat $outfile 
+        echo ""
+        echo "ERROR: failed to update AMO infos $url got status: $status"
+        exit 1
+    fi
+}
+
 
 ##
 ##  MAIN 
@@ -176,7 +216,7 @@ IFS=' ' read -r AMO_VERSION AMO_GUID <<<$(get_remote_content "$AMO_API_URL/addon
 NEXT_AMO_VERSION=$(get_next_version "$AMO_VERSION")
 
 # bulk download via curl -K with jq format magic also excludes README.md
-curl -s -K <(get_remote_content "https://api.github.com/repos/$GITHUB_REPOSITORY_OWNER/webextensions/contents/$GITHUB_WORKFLOW" | jq -r '.[] | select( .type == "file" and .name != "README.md" ) | "url = \(.download_url)\noutput = \(.name)"')
+curl -s -K <(get_remote_content "https://api.github.com/repos/$GITHUB_REPOSITORY_OWNER/webextensions/contents/$GITHUB_WORKFLOW" | jq -r '.[] | select ( .type == "file") | "url = \(.download_url)\noutput = \(.name)"')
 
 # write new version to file
 update_version "manifest.json" "${NEXT_AMO_VERSION}"
@@ -191,9 +231,7 @@ zip -r "$XPIFILE" *
 check_vars ISSUER SECRET 
 check_deps base64 openssl
 
-upload_xpi \
-    "$AMO_GUID" \
-    "$NEXT_AMO_VERSION" \
-    "$XPIFILE" \
-    "$(generate_auth_token)"
+upload_xpi  "$AMO_GUID"  "$NEXT_AMO_VERSION"  "$XPIFILE" 
 
+# we need to use the v5 API for this 
+update_AMO_info
