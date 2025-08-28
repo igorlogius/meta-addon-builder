@@ -159,7 +159,7 @@ update_AMO_info()  {
     local template='{
         "summary": { 
             "en-US": "" 
-        } 
+        },
         "description": { 
             "en-US": "" 
         } 
