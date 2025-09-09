@@ -156,16 +156,20 @@ update_version() {
 update_AMO_info()  {
     local summary=$(cat ./manifest.json | jq -r '.description')
     local description=$(< ./README.md)
+    local support_url="https://github.com/igorlogius/webextensions/issues/new/choose?title=$GITHUB_WORKFLOW - "
     local template='{
         "summary": { 
             "en-US": "" 
         },
         "description": { 
             "en-US": "" 
-        } 
+        },
+        "support_url": {
+            "en-US": ""
+        }
     }'
 
-    local updated_json=$(echo "$template" | jq --arg desciption "$description" --arg summary "$summary" '.description."en-US" = $desciption | .summary."en-US" = $summary')
+    local updated_json=$(echo "$template" | jq --arg desciption "$description" --arg summary "$summary" --arg support_url "$support_url" '.description."en-US" = $desciption | .summary."en-US" = $summary | .support_url."en-US" = $support_url' )
 
 
 
