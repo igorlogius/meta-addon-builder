@@ -156,7 +156,7 @@ update_version() {
 update_AMO_info()  {
     local summary=$(cat ./manifest.json | jq -r '.description')
     local description=$(< ./README.md)
-    local support_url="https://github.com/igorlogius/webextensions/issues/new/choose?title=$GITHUB_WORKFLOW - "
+    local support_url="https://github.com/igorlogius/webextensions/issues/new/choose?title=$GITHUB_WORKFLOW%20-"
     local template='{
         "summary": { 
             "en-US": "" 
