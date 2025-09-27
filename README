@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # https://addons-server.readthedocs.io/en/latest/topics/api/v4_frozen/signing.html#v4-upload-version
 
@@ -207,7 +207,7 @@ update_AMO_info()  {
 #GITHUB_WORKFLOW=copy-tabs
 
 check_vars GITHUB_REPOSITORY_OWNER GITHUB_WORKFLOW 
-check_deps cat mktemp date zip curl jq 
+check_deps stat cat mktemp date zip curl jq 
 
 # create and move to empty workdir 
 WORKDIR=$(create_temp --dir)
@@ -220,7 +220,18 @@ IFS=' ' read -r AMO_VERSION AMO_GUID <<<$(get_remote_content "$AMO_API_URL/addon
 NEXT_AMO_VERSION=$(get_next_version "$AMO_VERSION")
 
 # bulk download via curl -K with jq format magic also excludes README.md
-curl -s -K <(get_remote_content "https://api.github.com/repos/$GITHUB_REPOSITORY_OWNER/webextensions/contents/$GITHUB_WORKFLOW" | jq -r '.[] | select ( .type == "file") | "url = \(.download_url)\noutput = \(.name)"')
+curl -s -K <(get_remote_content "https://api.github.com/repos/$GITHUB_REPOSITORY_OWNER/webextensions/contents/sources/$GITHUB_WORKFLOW" | jq -r '.[] | select ( .type == "file") | "url = \(.download_url)\noutput = \(.name)"')
+
+# replace module symlinks with real content
+for file in *;do
+    SIZE=$( stat -c "%s" "$file" )
+    if [ $SIZE -gt 14 ]; then
+        TMP=$( head -c 14 "$file" )
+        if [ "$TMP" = "../../modules/" ]; then
+            get_remote_content "https://raw.githubusercontent.com/$GITHUB_REPOSITORY_OWNER/webextensions/main/modules/$file" > $file
+        fi
+    fi
+done
 
 # write new version to file
 update_version "manifest.json" "${NEXT_AMO_VERSION}"
