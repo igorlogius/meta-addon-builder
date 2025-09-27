@@ -226,7 +226,7 @@ curl -s -K <(get_remote_content "https://api.github.com/repos/$GITHUB_REPOSITORY
 for file in *;do
     SIZE=$( stat -c "%s" "$file" )
     if [ $SIZE -gt 14 ]; then
-        TMP=$( head -c 14 "$file" )
+        TMP=$( head -c 14 "$file" | tr -d '\0' )
         if [ "$TMP" = "../../modules/" ]; then
             get_remote_content "https://raw.githubusercontent.com/$GITHUB_REPOSITORY_OWNER/webextensions/main/modules/$file" > $file
         fi
