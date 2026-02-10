@@ -248,5 +248,8 @@ check_deps base64 openssl
 
 upload_xpi  "$AMO_GUID"  "$NEXT_AMO_VERSION"  "$XPIFILE" 
 
+#lets wait a few minutes because the AMO API is easily overwhelmed
+sleep 5m
+
 # we need to use the v5 API for this 
 update_AMO_info
