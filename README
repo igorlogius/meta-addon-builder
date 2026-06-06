@@ -127,15 +127,15 @@ check_deps(){
     for req in "$@";do
         type $req >/dev/null 2>&1 || { echo >&2 "ERROR: missing dependency: $req"; MISSING=1; }
     done
-    [ $MISSING -ne 0 ] && { echo "ERROR: aborting missing dependencies"; exit 1; }
+    [ $MISSING -ne 0 ] && { echo "ERROR: aborting due to missing dependencies"; exit 1; }
 }
 
 check_vars(){
     MISSING=0
     for req in "$@";do
-        [ -z $(eval echo "\${${req}+x}") ] && { echo "ERROR: missing variable: $req"; MISSING=1; }
+        [ -z "${!req}" ] && { echo "ERROR: Missing variable: $req" >&2; MISSING=1; }
     done
-    [ $MISSING -ne 0 ] && { echo "ERROR: aborting missing dependencies"; exit 1; }
+    [ $MISSING -ne 0 ] && { echo "ERROR: aborting due to missing variables"; exit 1; }
 }
 
 update_version() {
