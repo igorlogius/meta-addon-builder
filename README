@@ -1,255 +1,222 @@
 #!/usr/bin/env bash
-
+#
+# Build a WebExtension from its GitHub sources, bump the patch version,
+# upload it to AMO and refresh the AMO listing metadata.
+#
 # https://addons-server.readthedocs.io/en/latest/topics/api/v4_frozen/signing.html#v4-upload-version
+#
+# Required env: GITHUB_REPOSITORY_OWNER, GITHUB_WORKFLOW (extension folder / AMO slug),
+#               ISSUER, SECRET (AMO API credentials)
+# Optional env: AMO_WAIT  seconds to wait between upload and metadata update (default: 300)
+
+set -euo pipefail
 
 #
-# consts
-# 
+# constants
+#
 
-BASE_URL="https://addons.mozilla.org"
-AMO_API_URL="$BASE_URL/api/v4/addons"
+readonly BASE_URL="https://addons.mozilla.org"
+readonly AMO_API_V4="$BASE_URL/api/v4/addons"
+readonly AMO_API_V5="$BASE_URL/api/v5/addons/addon"   # v5 is needed to edit metadata
+readonly AMO_WAIT="${AMO_WAIT:-300}"                   # the AMO API is easily overwhelmed
+readonly MODULE_LINK_PREFIX="../../modules/"           # symlinks arrive as plain text files
+
+TMP_ROOT=""   # single temp dir; removing it cleans up everything
 
 #
-# functions
-# 
+# helpers
+#
 
-# Array to hold the names of created temporary files and directories
-temp_items=()
+log() { printf '%s\n' "$*" >&2; }
+die() { log "ERROR: $*"; exit 1; }
 
-# Function to create a temporary file or directory
-create_temp() {
-    local temp_item
-    local is_directory=false
-
-    # Check for the directory switch
-    if [[ "$1" == "--dir" ]]; then
-        is_directory=true
-        shift  # Remove the switch from the arguments
-    fi
-
-    if $is_directory; then
-        temp_item=$(mktemp -d)  # Create a temporary directory
-    else
-        temp_item=$(mktemp)  # Create a temporary file
-    fi
-
-    if [[ $? -eq 0 ]]; then
-        temp_items+=("$temp_item")  # Add the temp item to the array
-        echo "$temp_item"  # Return the name of the temp item
-    else
-        echo "Failed to create temporary item" >&2
-        return 1
+cleanup() {
+    if [[ -n $TMP_ROOT ]]; then
+        rm -rf -- "$TMP_ROOT"
     fi
 }
+trap cleanup EXIT
 
-# Function to clean up all created temporary files and directories
-cleanup_temp_items() {
-    for item in "${temp_items[@]}"; do
-        if [[ -e "$item" ]]; then
-            rm -rf "$item"  # Remove the temporary item
-            echo "Removed temporary item: $item"
+require_cmds() {
+    local cmd missing=()
+    for cmd in "$@"; do
+        command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
+    done
+    (( ${#missing[@]} == 0 )) || die "missing dependencies: ${missing[*]}"
+}
+
+require_vars() {
+    local var missing=()
+    for var in "$@"; do
+        [[ -n ${!var:-} ]] || missing+=("$var")
+    done
+    (( ${#missing[@]} == 0 )) || die "missing variables: ${missing[*]}"
+}
+
+# request EXPECTED_STATUS URL [curl args...]
+# Prints the response body on success; dies (showing the body) on any other status.
+# -g/--globoff: GUIDs contain curly braces which curl would otherwise try to expand.
+request() {
+    local expected="$1" url="$2"
+    shift 2
+
+    local body status
+    body=$(mktemp -p "$TMP_ROOT")
+    status=$(curl -sSL -g --url "$url" -o "$body" -w '%{http_code}' "$@") \
+        || die "request to $url failed"
+
+    if [[ $status != "$expected" ]]; then
+        cat "$body" >&2
+        printf '\n' >&2
+        die "$url returned HTTP $status (expected $expected)"
+    fi
+    cat "$body"
+}
+
+#
+# versioning
+#
+
+# 1.2.3 -> 1.2.4
+next_version() {
+    local major minor patch
+    IFS=. read -r major minor patch _ <<<"$1"
+    patch=${patch:-0}
+    [[ $major =~ ^[0-9]+$ && $minor =~ ^[0-9]+$ && $patch =~ ^[0-9]+$ ]] \
+        || die "unsupported version format: '$1'"
+    printf '%s.%s.%s\n' "$major" "$minor" "$((10#$patch + 1))"
+}
+
+set_manifest_version() {
+    local version="$1" tmp
+    [[ -f manifest.json ]] || die "manifest.json not found"
+    tmp=$(mktemp -p "$TMP_ROOT")
+    jq --arg version "$version" '.version = $version' manifest.json > "$tmp"
+    cat "$tmp" > manifest.json   # cat (not mv) keeps the original file mode
+}
+
+#
+# AMO auth
+#
+
+# base64url without padding
+b64url() { base64 | tr -d '=\n' | tr '+/' '-_'; }
+
+generate_jwt() {
+    local iat header payload signature
+    iat=$(date +%s)
+    header=$(printf '%s' '{"alg":"HS256","typ":"JWT"}' | b64url)
+    payload=$(printf '{"iss":"%s","iat":%d,"jti":"%s","exp":%d}' \
+        "$ISSUER" "$iat" "$(openssl rand -hex 16)" "$((iat + 30))" | b64url)
+    signature=$(printf '%s.%s' "$header" "$payload" \
+        | openssl dgst -binary -sha256 -hmac "$SECRET" | b64url)
+    printf '%s.%s.%s' "$header" "$payload" "$signature"
+}
+
+#
+# build
+#
+
+# Bulk-download all top-level files of the extension folder via curl's config-file mode.
+download_sources() {
+    local listing
+    listing=$(request 200 "https://api.github.com/repos/$GITHUB_REPOSITORY_OWNER/webextensions/contents/sources/$EXT_NAME")
+
+    # capture first: a failure inside <(...) would not stop the script
+    local curl_config
+    curl_config=$(jq -r '.[] | select(.type == "file") | "url = \"\(.download_url)\"\noutput = \"\(.name)\""' <<<"$listing")
+    curl -sSL --fail -K <(printf '%s\n' "$curl_config")
+}
+
+# Files that merely contain "../../modules/..." are symlinks; fetch the real content.
+resolve_module_links() {
+    local file
+    for file in *; do
+        [[ -f $file ]] || continue
+        if [[ $(head -c "${#MODULE_LINK_PREFIX}" -- "$file" | tr -d '\0') == "$MODULE_LINK_PREFIX" ]]; then
+            request 200 "https://raw.githubusercontent.com/$GITHUB_REPOSITORY_OWNER/webextensions/main/modules/$file" > "$file.new"
+            mv "$file.new" "$file"
         fi
     done
-    temp_items=()  # Clear the array after cleanup
 }
 
-# Trap to ensure cleanup on exit
-trap cleanup_temp_items EXIT
+#
+# AMO actions
+#
 
-# Function to calc the next version to upload to AMO
-get_next_version() {
-    local CURRENT_AMO_VERSION="$1" 
-    local CURRENT_AMO_VERSION_PARTS=($(echo -n "$CURRENT_AMO_VERSION" | tr '.' ' ' ))
-    local LAST_PART="${CURRENT_AMO_VERSION_PARTS[2]}"
-    local NEW_LAST_PART=$((LAST_PART+1))
-    echo "${CURRENT_AMO_VERSION_PARTS[0]}.${CURRENT_AMO_VERSION_PARTS[1]}.${NEW_LAST_PART}"
-}
-
-# Function to download the content of a remote 
-get_remote_content() {
-    local url="$1"
-    local outfile=$(create_temp);
-    local status=$(curl -s -L --url "$url" -w "%{http_code}" -o $outfile)
-    if [ $status -ne 200 ];then
-        echo ""
-        cat $outfile 
-        echo ""
-        echo "ERROR: failed to download $url got status: $status"
-        exit 1
-    fi
-    cat $outfile 
-}
-
-# Function to base64url encode ... without padding ===
-b64url_encode() { 
-    cat /dev/stdin | base64 -w0 | tr -d '=' | tr '/+' '_-'
-}
-
-# function to generate the jwt auth token 
-generate_auth_token() {
-    local header=$(echo -n '{"alg":"HS256","typ":"JWT"}' | b64url_encode)
-    local iat=$(date +%s)
-    local jti=$((iat+RANDOM))
-    local exp=$((iat+30))
-    local payload=$(echo -n "{\"iss\":\"${ISSUER}\",\"iat\":${iat},\"jti\":\"${jti}\",\"exp\":$exp}" | b64url_encode)
-    local header_payload=$(echo -n "${header}.${payload}")
-    local signature=$(echo -n "${header_payload}" | openssl dgst -binary -sha256 -hmac "${SECRET}" | b64url_encode)
-    echo "${header_payload}.${signature}"
-}
-
-# function to upload the generated xpi 
-upload_xpi(){
-    local guid="$1"
-    local version="$2"
-    local xpi="$3"
-    local outfile=$(create_temp)
-
-    # note -g --globoff allows curly braces which are part of the GUID in the URL
-    local status=$(curl -s -L --url "$AMO_API_URL/$guid/versions/$version/" \
-        -g \
+upload_xpi() {
+    local guid="$1" version="$2" xpi="$3"
+    request 202 "$AMO_API_V4/$guid/versions/$version/" \
         -X PUT \
         --form "upload=@$xpi" \
-        -H "Authorization: JWT $(generate_auth_token)" \
-        -w "%{http_code}" \
-        -o $outfile
-    )
-    if [ $status -ne 202 ];then
-        echo ""
-        cat $outfile 
-        echo ""
-        echo "ERROR: addon not accepted with status: $status"
-        exit 1
-    fi
+        -H "Authorization: JWT $(generate_jwt)" >/dev/null
 }
 
-check_deps(){
-    MISSING=0
-    for req in "$@";do
-        type $req >/dev/null 2>&1 || { echo >&2 "ERROR: missing dependency: $req"; MISSING=1; }
-    done
-    [ $MISSING -ne 0 ] && { echo "ERROR: aborting due to missing dependencies"; exit 1; }
-}
+update_amo_listing() {
+    [[ -f README.md ]] || die "README.md not found"
 
-check_vars(){
-    MISSING=0
-    for req in "$@";do
-        [ -z "${!req}" ] && { echo "ERROR: Missing variable: $req" >&2; MISSING=1; }
-    done
-    [ $MISSING -ne 0 ] && { echo "ERROR: aborting due to missing variables"; exit 1; }
-}
+    local summary description support_url payload
+    summary=$(jq -r '.description' manifest.json)
+    description=$(<README.md)
+    support_url="https://github.com/igorlogius/webextensions/issues/new/choose?title=$EXT_NAME%20-"
 
-update_version() {
-    local fp="$1"
-    local ver="$2"
+    payload=$(jq -n \
+        --arg summary "$summary" \
+        --arg description "$description" \
+        --arg support_url "$support_url" \
+        '{summary: {"en-US": $summary},
+          description: {"en-US": $description},
+          support_url: {"en-US": $support_url}}')
 
-    if [ ! -f $fp ];then
-        echo "ERROR: no manifest.json"
-        exit 1
-    fi
-
-    # update manifest.json with new version
-    local tmpfile=$(create_temp)
-    cat $fp > $tmpfile
-    jq --arg VERSION "$ver" '.version = $VERSION' $tmpfile > $fp
-}
-
-update_AMO_info()  {
-    local summary=$(cat ./manifest.json | jq -r '.description')
-    local description=$(< ./README.md)
-    local support_url="https://github.com/igorlogius/webextensions/issues/new/choose?title=$GITHUB_WORKFLOW%20-"
-    local template='{
-        "summary": { 
-            "en-US": "" 
-        },
-        "description": { 
-            "en-US": "" 
-        },
-        "support_url": {
-            "en-US": ""
-        }
-    }'
-
-    local updated_json=$(echo "$template" | jq --arg desciption "$description" --arg summary "$summary" --arg support_url "$support_url" '.description."en-US" = $desciption | .summary."en-US" = $summary | .support_url."en-US" = $support_url' )
-
-
-
-    # note: we need to use the v5 API for this 
-    # https://mozilla.github.io/addons-server/topics/api/addons.html#edit
-    # This endpoint allows an add-on’s AMO metadata to be edited.
-    local outfile=$(create_temp);
-    local status=$(curl \
-        -s \
-        -L  \
-        --url "$BASE_URL/api/v5/addons/addon/$GITHUB_WORKFLOW/"  \
+    request 200 "$AMO_API_V5/$EXT_NAME/" \
         -X PATCH \
-        -H 'Content-type: application/json' \
-        -H "Authorization: JWT $(generate_auth_token)"  \
-        -d "$updated_json" \
-        -w "%{http_code}" \
-        -o $outfile
-    )
-    if [ $status -ne 200 ];then
-        echo ""
-        cat $outfile 
-        echo ""
-        echo "ERROR: failed to update AMO infos $url got status: $status"
-        exit 1
-    fi
+        -H 'Content-Type: application/json' \
+        -H "Authorization: JWT $(generate_jwt)" \
+        --data-binary @- <<<"$payload" >/dev/null
 }
 
+#
+# main
+#
 
-##
-##  MAIN 
-##
+main() {
+    # fail early, before doing any work
+    require_vars GITHUB_REPOSITORY_OWNER GITHUB_WORKFLOW ISSUER SECRET
+    require_cmds curl jq zip openssl base64 date head tr mktemp cat
 
-# testing 
-#GITHUB_REPOSITORY_OWNER=igorlogius
-#GITHUB_WORKFLOW=copy-tabs
+    readonly EXT_NAME="$GITHUB_WORKFLOW"
+    TMP_ROOT=$(mktemp -d)
 
-check_vars GITHUB_REPOSITORY_OWNER GITHUB_WORKFLOW 
-check_deps stat cat mktemp date zip curl jq 
+    log "Looking up current AMO version of $EXT_NAME"
+    local info amo_version amo_guid next_amo_version
+    info=$(request 200 "$AMO_API_V4/addon/$EXT_NAME")
+    amo_version=$(jq -er '.current_version.version' <<<"$info")
+    amo_guid=$(jq -er '.guid' <<<"$info")
+    next_amo_version=$(next_version "$amo_version")
+    log "  $amo_version -> $next_amo_version ($amo_guid)"
 
-# create and move to empty workdir 
-WORKDIR=$(create_temp --dir)
-cd $WORKDIR;
+    mkdir "$TMP_ROOT/src"
+    cd "$TMP_ROOT/src"
 
-# get VERSION + GUID 
-IFS=' ' read -r AMO_VERSION AMO_GUID <<<$(get_remote_content "$AMO_API_URL/addon/$GITHUB_WORKFLOW" | jq -r '.current_version.version, .guid' | tr '\n' ' ')
+    log "Downloading sources"
+    download_sources
+    resolve_module_links
+    set_manifest_version "$next_amo_version"
 
-# determine next version
-NEXT_AMO_VERSION=$(get_next_version "$AMO_VERSION")
+    local xpi
+    xpi="$TMP_ROOT/$EXT_NAME-$next_amo_version-$(date '+%F_%H-%M').zip"
+    log "Packing $(basename "$xpi")"
+    zip -qr "$xpi" ./*
 
-# bulk download via curl -K with jq format magic also excludes README.md
-curl -s -K <(get_remote_content "https://api.github.com/repos/$GITHUB_REPOSITORY_OWNER/webextensions/contents/sources/$GITHUB_WORKFLOW" | jq -r '.[] | select ( .type == "file") | "url = \(.download_url)\noutput = \(.name)"')
+    log "Uploading to AMO"
+    upload_xpi "$amo_guid" "$next_amo_version" "$xpi"
 
-# replace module symlinks with real content
-for file in *;do
-    SIZE=$( stat -c "%s" "$file" )
-    if [ $SIZE -gt 14 ]; then
-        TMP=$( head -c 14 "$file" | tr -d '\0' )
-        if [ "$TMP" = "../../modules/" ]; then
-            get_remote_content "https://raw.githubusercontent.com/$GITHUB_REPOSITORY_OWNER/webextensions/main/modules/$file" > $file
-        fi
-    fi
-done
+    log "Waiting ${AMO_WAIT}s before updating the listing"
+    sleep "$AMO_WAIT"
 
-# write new version to file
-update_version "manifest.json" "${NEXT_AMO_VERSION}"
+    log "Updating AMO listing"
+    update_amo_listing
+    log "Done"
+}
 
-# pack files
-XPIFILE="${GITHUB_WORKFLOW}-${NEXT_AMO_VERSION}-$(date '+%F_%H-%M').zip" 
-zip -r "$XPIFILE" *
-
-
-# # # 
-
-check_vars ISSUER SECRET 
-check_deps base64 openssl
-
-upload_xpi  "$AMO_GUID"  "$NEXT_AMO_VERSION"  "$XPIFILE" 
-
-#lets wait a few minutes because the AMO API is easily overwhelmed
-sleep 5m
-
-# we need to use the v5 API for this 
-update_AMO_info
+main "$@"
