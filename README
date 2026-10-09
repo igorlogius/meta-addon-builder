@@ -1,13 +1,12 @@
 #!/usr/bin/env bash
 #
 # Build a WebExtension from its GitHub sources, bump the patch version,
-# upload it to AMO and refresh the AMO listing metadata.
+# and upload it to AMO 
 #
 # https://addons-server.readthedocs.io/en/latest/topics/api/v4_frozen/signing.html#v4-upload-version
 #
 # Required env: GITHUB_REPOSITORY_OWNER, GITHUB_WORKFLOW (extension folder / AMO slug),
 #               ISSUER, SECRET (AMO API credentials)
-# Optional env: AMO_WAIT  seconds to wait between upload and metadata update (default: 300)
 
 set -euo pipefail
 
@@ -17,8 +16,6 @@ set -euo pipefail
 
 readonly BASE_URL="https://addons.mozilla.org"
 readonly AMO_API_V4="$BASE_URL/api/v4/addons"
-readonly AMO_API_V5="$BASE_URL/api/v5/addons/addon"   # v5 is needed to edit metadata
-readonly AMO_WAIT="${AMO_WAIT:-300}"                   # the AMO API is easily overwhelmed
 readonly MODULE_LINK_PREFIX="../../modules/"           # symlinks arrive as plain text files
 
 TMP_ROOT=""   # single temp dir; removing it cleans up everything
@@ -152,29 +149,6 @@ upload_xpi() {
         -H "Authorization: JWT $(generate_jwt)" >/dev/null
 }
 
-update_amo_listing() {
-    [[ -f README.md ]] || die "README.md not found"
-
-    local summary description support_url payload
-    summary=$(jq -r '.description' manifest.json)
-    description=$(<README.md)
-    support_url="https://github.com/igorlogius/webextensions/issues/new/choose?title=$EXT_NAME%20-"
-
-    payload=$(jq -n \
-        --arg summary "$summary" \
-        --arg description "$description" \
-        --arg support_url "$support_url" \
-        '{summary: {"en-US": $summary},
-          description: {"en-US": $description},
-          support_url: {"en-US": $support_url}}')
-
-    request 200 "$AMO_API_V5/$EXT_NAME/" \
-        -X PATCH \
-        -H 'Content-Type: application/json' \
-        -H "Authorization: JWT $(generate_jwt)" \
-        --data-binary @- <<<"$payload" >/dev/null
-}
-
 #
 # main
 #
@@ -211,11 +185,6 @@ main() {
     log "Uploading to AMO"
     upload_xpi "$amo_guid" "$next_amo_version" "$xpi"
 
-    log "Waiting ${AMO_WAIT}s before updating the listing"
-    sleep "$AMO_WAIT"
-
-    log "Updating AMO listing"
-    update_amo_listing
     log "Done"
 }
 
